@@ -1,21 +1,27 @@
 // ==UserScript==
 // @name         B站键盘左右键按住后上下键调音量
 // @namespace    http://tampermonkey.net/
-// @version      1.2
-// @description  按住键盘左/右方向键不放，再按上下箭头调节音量，每次增减10%
+// @version      1.3
+// @description  按住键盘左/右方向键不放，再按上下箭头调节音量，每次增减10%，选集切换视频自动适配
 // @author       clotten
 // @match        *://*.bilibili.com/video/*
 // @match        *://*.bilibili.com/bangumi/*
 // @match        *://*.bilibili.com/cheese/*
 // @grant        none
 // ==/UserScript==
-
 (function fixBilibiliKeyHoldVolume() {
-    if (window.__bilibiliKeyVolumeFixLoaded) return;
-    window.__bilibiliKeyVolumeFixLoaded = true;
+    'use strict';
+    let observer = null;
+    let isHoldLeftKey = false;
+    let isHoldRightKey = false;
+    let volumeKeyHandler = null;
 
-    const style = document.createElement('style');
-    style.textContent = `
+    // 样式只注入一次
+    const styleId = 'bili-volume-copy-style';
+    if (!document.getElementById(styleId)) {
+        const style = document.createElement('style');
+        style.id = styleId;
+        style.textContent = `
 .bpx-player-volume-hint-copy{
     -webkit-box-align:center;-ms-flex-align:center;align-items:center;
     background:hsla(0,0%,100%,.8);
@@ -49,55 +55,13 @@
     text-align:center;
 }
 `;
-    document.head.appendChild(style);
-
-    let isHoldLeftKey = false;
-    let isHoldRightKey = false;
-
-    console.log("🚀脚本加载完成：按住【键盘← / →】不放，再按 ↑ / ↓ 调节音量，每次增减10%");
-
-    document.addEventListener('keydown', (e) => {
-        const tag = document.activeElement.tagName;
-        if (tag === 'INPUT' || tag === 'TEXTAREA') return;
-        if (e.code === 'ArrowLeft') isHoldLeftKey = true;
-        if (e.code === 'ArrowRight') isHoldRightKey = true;
-    }, true);
-
-    document.addEventListener('keyup', (e) => {
-        if (e.code === 'ArrowLeft') isHoldLeftKey = false;
-        if (e.code === 'ArrowRight') isHoldRightKey = false;
-    }, true);
-
-    window.addEventListener('keydown', (e) => {
-        const tag = document.activeElement.tagName;
-
-        if (e.code !== 'ArrowUp' && e.code !== 'ArrowDown') return;
-        if (tag === 'INPUT' || tag === 'TEXTAREA') return;
-
-        if (isHoldLeftKey || isHoldRightKey) {
-            e.stopImmediatePropagation();
-            e.preventDefault();
-
-            const video = document.querySelector('video');
-            if (!video) return;
-
-            // 每次增减 10%
-            if (e.code === 'ArrowUp') {
-                video.volume = Math.min(1, video.volume + 0.1);
-            } else {
-                video.volume = Math.max(0, video.volume - 0.1);
-            }
-
-            const volPercent = Math.round(video.volume * 100);
-            showVolumeToast(volPercent);
-        }
-    }, true);
+        document.head.appendChild(style);
+    }
 
     function showVolumeToast(volPercent) {
         let hintDom = document.querySelector('.bpx-player-volume-hint-copy');
         const playerWrap = document.querySelector('.bpx-player-video-wrap');
         if (!playerWrap) return;
-
         if (!hintDom) {
             hintDom = document.createElement('div');
             hintDom.className = 'bpx-player-volume-hint-copy';
@@ -110,13 +74,10 @@
 `;
             playerWrap.appendChild(hintDom);
         }
-
         const textSpan = hintDom.querySelector('.bpx-player-volume-hint-text-copy');
         const svgNormal = hintDom.querySelector('.bpx-player-volume-hint-icon-copy svg:nth-child(1)');
         const svgMute = hintDom.querySelector('.bpx-player-volume-hint-icon-copy svg:nth-child(2)');
-
         textSpan.textContent = `${volPercent}%`;
-
         if (volPercent <= 0) {
             svgNormal.style.display = 'none';
             svgMute.style.display = 'inline-block';
@@ -124,7 +85,6 @@
             svgNormal.style.display = 'inline-block';
             svgMute.style.display = 'none';
         }
-
         hintDom.style.opacity = '1';
         clearTimeout(hintDom._timer);
         hintDom._timer = setTimeout(() => {
@@ -132,5 +92,65 @@
         }, 800);
     }
 
-    console.log('✅注入完毕，每次音量增减10%');
+    function initPlayer() {
+        const playerWrap = document.querySelector('.bpx-player-video-wrap');
+        if (!playerWrap) return false;
+        // 清理旧弹窗DOM
+        const oldHint = document.querySelector('.bpx-player-volume-hint-copy');
+        if (oldHint) oldHint.remove();
+        // 移除旧的音量按键监听，防止多次绑定
+        if (volumeKeyHandler) {
+            window.removeEventListener('keydown', volumeKeyHandler, true);
+        }
+        isHoldLeftKey = false;
+        isHoldRightKey = false;
+
+        // 监听左右箭头按下，记录按住状态
+        document.addEventListener('keydown', (e) => {
+            const tag = document.activeElement.tagName;
+            if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+            if (e.code === 'ArrowLeft') isHoldLeftKey = true;
+            if (e.code === 'ArrowRight') isHoldRightKey = true;
+        }, true);
+        document.addEventListener('keyup', (e) => {
+            if (e.code === 'ArrowLeft') isHoldLeftKey = false;
+            if (e.code === 'ArrowRight') isHoldRightKey = false;
+        }, true);
+
+        // 上下箭头处理音量逻辑
+        volumeKeyHandler = function (e) {
+            const tag = document.activeElement.tagName;
+            if (e.code !== 'ArrowUp' && e.code !== 'ArrowDown') return;
+            if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+            if (isHoldLeftKey || isHoldRightKey) {
+                e.stopImmediatePropagation();
+                e.preventDefault();
+                const video = document.querySelector('video');
+                if (!video) return;
+                if (e.code === 'ArrowUp') {
+                    video.volume = Math.min(1, video.volume + 0.1);
+                } else {
+                    video.volume = Math.max(0, video.volume - 0.1);
+                }
+                const volPercent = Math.round(video.volume * 100);
+                showVolumeToast(volPercent);
+            }
+        };
+        window.addEventListener('keydown', volumeKeyHandler, true);
+        console.log("✅播放器初始化完成，选集切换后自动生效");
+        return true;
+    }
+
+    // 监听页面DOM，一旦播放器容器出现，自动初始化
+    function watchPlayerChange() {
+        if (observer) observer.disconnect();
+        observer = new MutationObserver(() => {
+            const wrap = document.querySelector('.bpx-player-video-wrap');
+            if (wrap) {
+                initPlayer();
+            }
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+    }
+    watchPlayerChange();
 })();
