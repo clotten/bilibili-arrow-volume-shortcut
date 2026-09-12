@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         B站键盘左右键按住后上下键调音量
 // @namespace    http://tampermonkey.net/
-// @version      1.3
+// @version      1.3.1
 // @description  按住键盘左/右方向键不放，再按上下箭头调节音量，每次增减10%，选集切换视频自动适配
 // @author       clotten
 // @match        *://*.bilibili.com/video/*
@@ -15,6 +15,8 @@
     let isHoldLeftKey = false;
     let isHoldRightKey = false;
     let volumeKeyHandler = null;
+    let hasInitPlayer = false; // 新增：标记已经初始化过播放器
+    let debounceTimer = null;  // 防抖定时器
 
     // 样式只注入一次
     const styleId = 'bili-volume-copy-style';
@@ -94,7 +96,13 @@
 
     function initPlayer() {
         const playerWrap = document.querySelector('.bpx-player-video-wrap');
-        if (!playerWrap) return false;
+        if (!playerWrap) {
+            hasInitPlayer = false;
+            return false;
+        }
+        // 如果已经初始化，直接跳过，避免刷屏
+        if(hasInitPlayer) return false;
+
         // 清理旧弹窗DOM
         const oldHint = document.querySelector('.bpx-player-volume-hint-copy');
         if (oldHint) oldHint.remove();
@@ -137,18 +145,24 @@
             }
         };
         window.addEventListener('keydown', volumeKeyHandler, true);
+        hasInitPlayer = true;
         console.log("✅播放器初始化完成，选集切换后自动生效");
         return true;
     }
 
-    // 监听页面DOM，一旦播放器容器出现，自动初始化
+    // 监听页面DOM，防抖，减少频繁触发
     function watchPlayerChange() {
         if (observer) observer.disconnect();
         observer = new MutationObserver(() => {
-            const wrap = document.querySelector('.bpx-player-video-wrap');
-            if (wrap) {
+            clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(()=>{
+                // 检测播放器容器是否消失（切换选集时容器销毁）
+                const wrap = document.querySelector('.bpx-player-video-wrap');
+                if(!wrap){
+                    hasInitPlayer = false;
+                }
                 initPlayer();
-            }
+            },150); // 150ms防抖，过滤大量高频DOM变动
         });
         observer.observe(document.body, { childList: true, subtree: true });
     }
